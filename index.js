@@ -10,6 +10,7 @@ module.exports = {
 
   sphinxConfig: null,
   decoder: null,
+  detected: null,
 
   listen: function(words, listenTime, onwake) {
     if (!this.sphinxConfig) {
@@ -32,13 +33,13 @@ module.exports = {
         config.setString("-lm", Path.join(path, 'en-us.lm.bin'));
         config.setString('-logfn', '/dev/null');
 
-        this.listen(words, onwake);
+        this.listen(words, listenTime, onwake);
       });
 
       return;
     }
 
-    if (!this.decoder) {
+    if (this.decoder) {
       this.stop();
     }
 
@@ -49,9 +50,7 @@ module.exports = {
     this.decoder.setSearch('wakeword');
     this.decoder.startUtt();
 
-    if (this.mic) {
-      this.mic.stop();
-    } else {
+    if (!this.mic) {
       this.mic = Mic(
         { rate: '16000',
           channels: '1',
@@ -62,36 +61,50 @@ module.exports = {
       });
     }
 
-    var buffer = Concat(decode);
-    var stream = this.mic.getAudioStream();
-
+    var startTime = Date.now();
+    var setWakewordUtt = data => {
+      if (this.detected) {
+        this.detected.data = data;
+      };
+    }
+    var wakeBuffer = Concat(setWakewordUtt);
     var decode = data => {
       if (!this.detected) {
+        wakeBuffer.write(data);
         this.decoder.processRaw(data, false, false);
+
+        var now = Date.now();
         var hyp = this.decoder.hyp();
         if (hyp && hyp.hypstr) {
-          console.log('Wake word detected: ' + hyp.hypstr);
-          this.detected = this.decoder.getRawdata();
-        } else if (Date.now() - startTime > listenTime) {
+          this.detected = {
+            word: hyp.hypstr,
+          };
+          wakeBuffer.end();
+        } else if (now - startTime > listenTime) {
           this.decoder.endUtt();
           this.decoder.startUtt();
+          wakeBuffer.end();
+          wakeBuffer = Concat(setWakewordUtt);
+          startTime = now;
         }
         return;
       }
 
-      onwake(data, this.detected);
+      onwake(data, this.detected.word, this.detected.data);
     };
 
-    var startTime, speechSampleTime;
-    startTime = speechSampleTime = Date.now();
+    var buffer = Concat(decode);
+    var speechSampleTime = startTime;
 
-    stream.removeAllListeners('data');
+    var stream = this.mic.getAudioStream();
     stream.on('data', data => {
       buffer.write(data);
 
-      if (Date.now() - speechSampleTime > 300) {
+      var now = Date.now();
+      if (now - speechSampleTime > 300) {
         buffer.end();
         buffer = Concat(decode);
+        speechSampleTime = now;
       }
     });
 
@@ -99,8 +112,13 @@ module.exports = {
   },
 
   stop: function() {
+    this.mic.getAudioStream().removeAllListeners();
     this.mic.stop();
+    this.mic = null;  // XXX Doesn't seem like mic is reusable after stopping
+
     this.decoder.endUtt();
     this.decoder = null;
+
+    this.detected = null;
   }
 };
