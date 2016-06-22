@@ -1,0 +1,22 @@
+{
+  "name": "wakeword",
+  "version": "0.0.1",
+  "description": "A library to detect wake words and aid in responding to them",
+  "license": "GPL-3.0",
+  "author": {
+    "name": "Chris Lord",
+    "email": "contact@chrislord.net",
+    "url": "http://chrislord.net/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://gitlab.com/Cwiiis/wakeword.git"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "concat-stream": "1.5.1",
+    "mic": "2.0.1",
+    "pocketsphinx": "5.0.5",
+    "which": "1.2.9"
+  }
+}
