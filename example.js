@@ -4,14 +4,13 @@ const Fs = require('fs');
 function listen() {
   var rawStream = null;
   var wakeTime = 0;
-  Wakeword.listen(['record'], 3000, (data, word, wordData) => {
+  Wakeword.listen(['record'], 0.87, (data, word) => {
     if (!rawStream) {
       console.log('Detected wake word, recording');
       wakeTime = Date.now();
       rawStream = Fs.createWriteStream('recording.raw', {
         defaultEncoding: 'binary'
       });
-      rawStream.write(wordData);
     }
 
     rawStream.write(data);

@@ -17,18 +17,19 @@ module.exports = {
 
   state: stateEnum.STOPPED,
   sphinxConfig: null,
+  logFile: '/dev/null',
   decoder: null,
   detected: null,
   pendingState: null,
 
-  listen: function(words, listenTime, onwake, ignoreState) {
+  listen: function(words, scoreThreshold, onwake, ignoreState) {
     if (!ignoreState) {
       switch (this.state) {
         case stateEnum.LOADING:
           this.pendingState = {
             state: stateEnum.LISTENING,
             words: words,
-            listenTime: listenTime,
+            scoreThreshold: scoreThreshold,
             onwake: onwake };
           return;
 
@@ -63,9 +64,9 @@ module.exports = {
         var config = this.sphinxConfig = PocketSphinx.Decoder.defaultConfig();
         config.setString("-hmm", Path.join(path, 'en-us'));
         config.setString("-dict", Path.join(path, 'cmudict-en-us.dict'));
-        config.setString('-logfn', '/dev/null');
+        config.setString('-logfn', this.logFile);
 
-        this.listen(words, listenTime, onwake, true);
+        this.listen(words, scoreThreshold, onwake, true);
       });
 
       return;
@@ -98,7 +99,7 @@ module.exports = {
           switch (pendingState.state) {
             case stateEnum.LISTENING:
               this.state = stateEnum.STOPPED;
-              this.listen(pendingState.words, pendingState.listenTime,
+              this.listen(pendingState.words, pendingState.scoreThreshold,
                           pendingState.onwake);
               return;
 
@@ -131,40 +132,28 @@ module.exports = {
           });
         }
 
-        var startTime = Date.now();
-        var setWakewordUtt = data => {
-          if (this.detected) {
-            this.detected.data = data;
-          };
-        }
-        var wakeBuffer = Concat(setWakewordUtt);
         var decode = data => {
           if (!this.detected) {
-            wakeBuffer.write(data);
             this.decoder.processRaw(data, false, false);
 
             var now = Date.now();
             var hyp = this.decoder.hyp();
             if (hyp && hyp.hypstr) {
-              this.detected = {
-                word: hyp.hypstr,
-              };
-              wakeBuffer.end();
-            } else if (now - startTime > listenTime) {
               this.decoder.endUtt();
-              this.decoder.startUtt();
-              wakeBuffer.end();
-              wakeBuffer = Concat(setWakewordUtt);
-              startTime = now;
+              if (this._checkScore(scoreThreshold)) {
+                this.detected = hyp.hypstr;
+              } else {
+                this.decoder.startUtt();
+              }
             }
             return;
           }
 
-          onwake(data, this.detected.word, this.detected.data);
+          onwake(data, this.detected);
         };
 
         var buffer = Concat(decode);
-        var speechSampleTime = startTime;
+        var speechSampleTime = Date.now();
 
         var stream = this.mic.getAudioStream();
         stream.on('data', data => {
@@ -183,6 +172,15 @@ module.exports = {
     });
   },
 
+  _checkScore: function(threshold) {
+    var seg = this.decoder.seg().iter().next();
+    if (!seg) {
+      return false;
+    }
+
+    return this.decoder.getLogmath().exp(seg.prob) >= threshold;
+  },
+
   stop: function() {
     switch (this.state) {
       case stateEnum.STOPPED:
@@ -197,7 +195,9 @@ module.exports = {
     this.mic.stop();
     this.mic = null;  // XXX Doesn't seem like mic is reusable after stopping
 
-    this.decoder.endUtt();
+    if (!this.detected) {
+      this.decoder.endUtt();
+    }
     this.decoder = null;
 
     this.detected = null;
