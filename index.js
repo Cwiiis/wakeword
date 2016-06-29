@@ -21,6 +21,7 @@ module.exports = {
   decoder: null,
   detected: null,
   pendingState: null,
+  sampleTime: 100,
 
   listen: function(words, scoreThreshold, onwake, ignoreState) {
     if (!ignoreState) {
@@ -160,7 +161,7 @@ module.exports = {
           buffer.write(data);
 
           var now = Date.now();
-          if (now - speechSampleTime > 300) {
+          if (now - speechSampleTime > this.sampleTime) {
             buffer.end();
             buffer = Concat(decode);
             speechSampleTime = now;
