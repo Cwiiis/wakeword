@@ -9,7 +9,8 @@ const Which = require('which');
 const stateEnum = {
   STOPPED: 0,
   LOADING: 1,
-  LISTENING: 2
+  LISTENING: 2,
+  PAUSED: 3
 };
 
 module.exports = {
@@ -36,6 +37,7 @@ module.exports = {
           return;
 
         case stateEnum.LISTENING:
+        case stateEnum.PAUSED:
           this.stop();
           break;
       }
@@ -162,7 +164,7 @@ module.exports = {
         }
 
         for (var word of words) {
-          Fs.write(file, `${word} /1e-20/`);
+          Fs.write(file, `${word}/1e-20/\n`);
         }
 
         Fs.close(file, e => {
@@ -185,6 +187,35 @@ module.exports = {
     }
 
     return this.decoder.getLogmath().exp(seg.prob) >= threshold;
+  },
+
+  pause: function() {
+    if (this.state !== stateEnum.LISTENING) {
+      console.warn('Attempted to pause from invalid state: ', this.state);
+      return;
+    }
+
+    this.mic.pause();
+    this.state = stateEnum.PAUSED;
+  },
+
+  resume: function() {
+    switch (this.state) {
+      case stateEnum.LISTENING:
+        if (this.detected) {
+          this.decoder.startUtt();
+          this.detected = null;
+        }
+        break;
+
+      case stateEnum.PAUSED:
+        this.mic.resume();
+        this.state = stateEnum.LISTENING;
+        break;
+
+      default:
+        console.warn('Attempted to resume from invalid state: ', this.state);
+    }
   },
 
   stop: function() {
