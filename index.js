@@ -4,7 +4,6 @@ const Fs = require('fs');
 const Mic = require('mic');
 const Path = require('path');
 const PocketSphinx = require('pocketsphinx').ps;
-const Temp = require('temp').track();
 const Which = require('which');
 
 const stateEnum = {
@@ -18,6 +17,8 @@ module.exports = {
   state: stateEnum.STOPPED,
   sphinxConfig: null,
   logFile: null,
+  keywordFile: 'wakewords.txt',
+  lastWords: [],
   decoder: null,
   detected: null,
   pendingState: null,
@@ -41,12 +42,6 @@ module.exports = {
     }
 
     this.state = stateEnum.LOADING;
-
-    Temp.cleanup((e, stats) => {
-      if (e) {
-        console.error('Error cleaning temporary files', e);
-      }
-    });
 
     if (!this.sphinxConfig) {
       Which('pocketsphinx_continuous', (e, path) => {
@@ -75,104 +70,112 @@ module.exports = {
       return;
     }
 
-    // pocketsphinx doesn't allow for multiple keywords or configurable
-    // threshold via any public API except for the keyword file.
-    Temp.open('kws', (e, info) => {
-      if (e) {
-        console.error('Error opening keyword file', e);
-        this.state = stateEnum.STOPPED;
-        return;
+    var startListening = () => {
+      if (this.pendingState) {
+        var pendingState = this.pendingState;
+        this.pendingState = null;
+
+        switch (pendingState.state) {
+          case stateEnum.LISTENING:
+            this.state = stateEnum.STOPPED;
+            this.listen(pendingState.words, pendingState.scoreThreshold,
+                        pendingState.onwake);
+            return;
+
+          case stateEnum.STOPPED:
+            this.state = stateEnum.STOPPED;
+            return;
+
+          default:
+            console.error('Stopping, invalid pending state',
+                          pendingState.state);
+            this.state = stateEnum.STOPPED;
+            return;
+        }
       }
 
-      for (var word of words) {
-        Fs.write(info.fd, `${word} /1e-20/`);
+      this.state = stateEnum.LISTENING;
+      this.decoder = new PocketSphinx.Decoder(this.sphinxConfig);
+      this.decoder.setKws('wakeword', this.keywordFile);
+      this.decoder.setSearch('wakeword');
+      this.decoder.startUtt();
+
+      if (!this.mic) {
+        this.mic = Mic(
+          { rate: '16000',
+            channels: '1',
+            encoding: 'signed-integer',
+            device: 'default' });
+        this.mic.getAudioStream().on('error', e => {
+          console.error('Error streaming from microphone', e);
+        });
       }
 
-      Fs.close(info.fd, e => {
+      var decode = data => {
+        if (!this.detected) {
+          this.decoder.processRaw(data, false, false);
+
+          var now = Date.now();
+          var hyp = this.decoder.hyp();
+          if (hyp && hyp.hypstr) {
+            this.decoder.endUtt();
+            if (this._checkScore(scoreThreshold)) {
+              this.detected = hyp.hypstr;
+            } else {
+              this.decoder.startUtt();
+            }
+          }
+          return;
+        }
+
+        onwake(data, this.detected);
+      };
+
+      var buffer = Concat(decode);
+      var speechSampleTime = Date.now();
+
+      var stream = this.mic.getAudioStream();
+      stream.on('data', data => {
+        buffer.write(data);
+
+        var now = Date.now();
+        if (now - speechSampleTime > this.sampleTime) {
+          buffer.end();
+          buffer = Concat(decode);
+          speechSampleTime = now;
+        }
+      });
+
+      this.mic.start();
+    };
+
+    if (JSON.stringify(this.lastWords) === JSON.stringify(words)) {
+      startListening();
+    } else {
+      // pocketsphinx doesn't allow for multiple keywords or configurable
+      // threshold via any public API except for the keyword file.
+      Fs.open(this.keywordFile, 'w', (e, file) => {
         if (e) {
-          console.error('Error closing keyword file', e);
+          console.error('Error opening keyword file', e);
           this.state = stateEnum.STOPPED;
           return;
         }
 
-        if (this.pendingState) {
-          var pendingState = this.pendingState;
-          this.pendingState = null;
-
-          switch (pendingState.state) {
-            case stateEnum.LISTENING:
-              this.state = stateEnum.STOPPED;
-              this.listen(pendingState.words, pendingState.scoreThreshold,
-                          pendingState.onwake);
-              return;
-
-            case stateEnum.STOPPED:
-              this.state = stateEnum.STOPPED;
-              return;
-
-            default:
-              console.error('Stopping, invalid pending state',
-                            pendingState.state);
-              this.state = stateEnum.STOPPED;
-              return;
-          }
+        for (var word of words) {
+          Fs.write(file, `${word} /1e-20/`);
         }
 
-        this.state = stateEnum.LISTENING;
-        this.decoder = new PocketSphinx.Decoder(this.sphinxConfig);
-        this.decoder.setKws('wakeword', info.path);
-        this.decoder.setSearch('wakeword');
-        this.decoder.startUtt();
-
-        if (!this.mic) {
-          this.mic = Mic(
-            { rate: '16000',
-              channels: '1',
-              encoding: 'signed-integer',
-              device: 'default' });
-          this.mic.getAudioStream().on('error', e => {
-            console.error('Error streaming from microphone', e);
-          });
-        }
-
-        var decode = data => {
-          if (!this.detected) {
-            this.decoder.processRaw(data, false, false);
-
-            var now = Date.now();
-            var hyp = this.decoder.hyp();
-            if (hyp && hyp.hypstr) {
-              this.decoder.endUtt();
-              if (this._checkScore(scoreThreshold)) {
-                this.detected = hyp.hypstr;
-              } else {
-                this.decoder.startUtt();
-              }
-            }
+        Fs.close(file, e => {
+          if (e) {
+            console.error('Error closing keyword file', e);
+            this.state = stateEnum.STOPPED;
             return;
           }
 
-          onwake(data, this.detected);
-        };
-
-        var buffer = Concat(decode);
-        var speechSampleTime = Date.now();
-
-        var stream = this.mic.getAudioStream();
-        stream.on('data', data => {
-          buffer.write(data);
-
-          var now = Date.now();
-          if (now - speechSampleTime > this.sampleTime) {
-            buffer.end();
-            buffer = Concat(decode);
-            speechSampleTime = now;
-          }
+          startListening();
         });
-
-        this.mic.start();
       });
-    });
+    }
   },
 
   _checkScore: function(threshold) {
