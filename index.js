@@ -17,7 +17,7 @@ module.exports = {
 
   state: stateEnum.STOPPED,
   sphinxConfig: null,
-  logFile: '/dev/null',
+  logFile: null,
   decoder: null,
   detected: null,
   pendingState: null,
@@ -65,7 +65,9 @@ module.exports = {
         var config = this.sphinxConfig = PocketSphinx.Decoder.defaultConfig();
         config.setString("-hmm", Path.join(path, 'en-us'));
         config.setString("-dict", Path.join(path, 'cmudict-en-us.dict'));
-        config.setString('-logfn', this.logFile);
+        if (this.logFile) {
+          config.setString('-logfn', this.logFile);
+        }
 
         this.listen(words, scoreThreshold, onwake, true);
       });
