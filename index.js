@@ -7,25 +7,65 @@ const PocketSphinx = require('pocketsphinx').ps;
 const Which = require('which');
 
 const stateEnum = {
-  STOPPED: 0,
-  LOADING: 1,
-  LISTENING: 2,
-  PAUSED: 3
+  STOPPED: 'stopped',
+  LOADING: 'loading',
+  LISTENING: 'listening',
+  PAUSED: 'paused'
 };
 
+/**
+ * Wakeword module.
+ * @module wakeword
+ */
 module.exports = {
 
-  state: stateEnum.STOPPED,
-  sphinxConfig: null,
+  /**
+   * The file name to output PocketSphinx logs to.
+   * null will output to stdout.
+   */
   logFile: null,
+
+  /**
+   * The file name to use for passing wake words to PocketSphinx.
+   */
   keywordFile: 'wakewords.txt',
-  lastWords: [],
-  decoder: null,
+
+  /**
+   * The microphone device name, when applicable.
+   */
   deviceName: 'default',
-  detected: null,
-  pendingState: null,
+
+  /**
+   * The time between voice processing calls, in milliseconds.
+   */
   sampleTime: 100,
 
+  /**
+   * The PocketSphinx decoder object being used. Setting this to null when
+   * in the stopped state will cause it to be recreated.
+   */
+  decoder: null,
+
+  /**
+   * The current state. Can be {@code stopped}, {@code loading},
+   * {@code listening} or {@code paused}.
+   * @readonly
+   */
+  state: stateEnum.STOPPED,
+
+  // Private properties.
+  sphinxConfig: null,
+  lastWords: [],
+  detected: null,
+  pendingState: null,
+
+  /**
+   * Retrieves the PocketSphinx configuration. This configuration will be used
+   * whenever the next PocketSphinx decoder is created.
+   *
+   * @returns {Promise.Object} A Promise that resolves a PocketSphinx
+   *   configuration object.
+   */
   getPsConfig: function() {
     return new Promise((resolve, reject) => {
       if (this.sphinxConfig) {
@@ -59,6 +99,13 @@ module.exports = {
     });
   },
 
+  /**
+   * Retrieves the PocketSphinx decoder. If one hasn't been created yet, one
+   * will be created.
+   *
+   * @returns {Promise.Object} A Promise that resolves a PocketSphinx decoder
+   *   object.
+   */
   getDecoder: function() {
     return new Promise((resolve, reject) => {
       this.getPsConfig().then(() => {
@@ -70,6 +117,12 @@ module.exports = {
     });
   },
 
+  /**
+   * Retrieves a microphone object. If one hasn't been created yet, one will
+   * be created.
+   *
+   * @returns {Object} A microphone object.
+   */
   getMic: function() {
     if (!this.mic) {
       this.mic = Mic(
@@ -85,6 +138,43 @@ module.exports = {
     return this.mic;
   },
 
+  /**
+   * This callback handles microphone data after a successful wake word
+   * recognition.
+   *
+   * @callback onwakeCallback
+   * @param {Object} data Data from the microphone
+   * @param {string} word The word that was recognised.
+   */
+
+  /**
+   * Listens for the specified wake words. Once a word has been recognised,
+   * microphone data will be continuously streamed to the {@code onwake}
+   * callback until it is cancelled.
+   *
+   * @example
+   * var wakeTime;
+   * var rawStream = null;
+   * Wakeword.listen(['record'], 0.87, (data, word) => {
+   *   if (!rawStream) {
+   *     wakeTime = Date.now();
+   *     rawStream = Fs.createWriteStream('recording.raw', {
+   *       defaultEncoding: 'binary'
+   *     });
+   *   }
+   *
+   *   rawStream.write(data);
+   *
+   *   if (Date.now() - wakeTime > 5000) {
+   *     Wakeword.stop();
+   *     rawStream.end();
+   *   }
+   * });
+   *
+   * @param {Array.<string>} words An array of wake words
+   * @param {number} scoreThreshold The recognition score threshold (e.g. 0.87)
+   * @param {onwakeCallback} onwake The callback to handle microphone data
+   */
   listen: function(words, scoreThreshold, onwake) {
     switch (this.state) {
       case stateEnum.LOADING:
@@ -211,16 +301,29 @@ module.exports = {
     return this.decoder.getLogmath().exp(seg.prob) >= threshold;
   },
 
+  /**
+   * Pauses microphone recording.
+   */
   pause: function() {
-    if (this.state !== stateEnum.LISTENING) {
-      console.warn('Attempted to pause from invalid state: ', this.state);
-      return;
-    }
+    switch (this.state) {
+      case stateEnum.LISTENING:
+        this.mic.pause();
+        this.state = stateEnum.PAUSED;
+        break;
 
-    this.mic.pause();
-    this.state = stateEnum.PAUSED;
+      case stateEnum.PAUSED:
+        break;
+
+      default:
+        console.warn('Attempted to pause from invalid state: ', this.state);
+    }
   },
 
+  /**
+   * Resumes microphone recording. If called after recognising a wake word,
+   * this will stop streaming to the {@code onwake} callback and resume
+   * listening for the last requested wake words.
+   */
   resume: function() {
     switch (this.state) {
       case stateEnum.LISTENING:
@@ -240,6 +343,9 @@ module.exports = {
     }
   },
 
+  /**
+   * Stops microphone recording and wake word recognition.
+   */
   stop: function() {
     switch (this.state) {
       case stateEnum.STOPPED:

@@ -1,1 +1,5 @@
 node_modules
+out
+.*.swp
+wakewords.txt
+recording.raw
