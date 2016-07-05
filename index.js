@@ -21,6 +21,7 @@ module.exports = {
   keywordFile: 'wakewords.txt',
   lastWords: [],
   decoder: null,
+  deviceName: 'default',
   detected: null,
   pendingState: null,
   sampleTime: 100,
@@ -107,7 +108,7 @@ module.exports = {
           { rate: '16000',
             channels: '1',
             encoding: 'signed-integer',
-            device: 'default' });
+            device: this.deviceName });
         this.mic.getAudioStream().on('error', e => {
           console.error('Error streaming from microphone', e);
         });
