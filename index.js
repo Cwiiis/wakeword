@@ -59,6 +59,32 @@ module.exports = {
     });
   },
 
+  getDecoder: function() {
+    return new Promise((resolve, reject) => {
+      this.getPsConfig().then(() => {
+        if (!this.decoder) {
+          this.decoder = new PocketSphinx.Decoder(this.sphinxConfig);
+        }
+        resolve(this.decoder);
+      });
+    });
+  },
+
+  getMic: function() {
+    if (!this.mic) {
+      this.mic = Mic(
+        { rate: '16000',
+          channels: '1',
+          encoding: 'signed-integer',
+          device: this.deviceName });
+      this.mic.getAudioStream().on('error', e => {
+        console.error('Error streaming from microphone', e);
+      });
+    }
+
+    return this.mic;
+  },
+
   listen: function(words, scoreThreshold, onwake) {
     switch (this.state) {
       case stateEnum.LOADING:
@@ -77,7 +103,7 @@ module.exports = {
 
     this.state = stateEnum.LOADING;
 
-    this.getPsConfig().then(() => {
+    this.getDecoder().then(() => {
       var startListening = () => {
         if (this.pendingState) {
           var pendingState = this.pendingState;
@@ -103,23 +129,10 @@ module.exports = {
         }
 
         this.state = stateEnum.LISTENING;
-        if (!this.decoder) {
-          this.decoder = new PocketSphinx.Decoder(this.sphinxConfig);
-        }
         this.decoder.setKws('wakeword', this.keywordFile);
         this.decoder.setSearch('wakeword');
         this.decoder.startUtt();
-
-        if (!this.mic) {
-          this.mic = Mic(
-            { rate: '16000',
-              channels: '1',
-              encoding: 'signed-integer',
-              device: this.deviceName });
-          this.mic.getAudioStream().on('error', e => {
-            console.error('Error streaming from microphone', e);
-          });
-        }
+        this.getMic();
 
         var decode = data => {
           if (!this.detected) {
