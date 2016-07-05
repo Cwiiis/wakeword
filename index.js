@@ -26,37 +26,23 @@ module.exports = {
   pendingState: null,
   sampleTime: 100,
 
-  listen: function(words, scoreThreshold, onwake, ignoreState) {
-    if (!ignoreState) {
-      switch (this.state) {
-        case stateEnum.LOADING:
-          this.pendingState = {
-            state: stateEnum.LISTENING,
-            words: words,
-            scoreThreshold: scoreThreshold,
-            onwake: onwake };
-          return;
-
-        case stateEnum.LISTENING:
-        case stateEnum.PAUSED:
-          this.stop();
-          break;
+  getPsConfig: function() {
+    return new Promise((resolve, reject) => {
+      if (this.sphinxConfig) {
+        resolve(this.sphinxConfig);
+        return;
       }
-    }
 
-    this.state = stateEnum.LOADING;
-
-    if (!this.sphinxConfig) {
       Which('pocketsphinx_continuous', (e, path) => {
         if (e) {
-          console.error('Error searching for pocketsphinx', e);
+          reject(e);
           return;
         }
 
         path = Path.join(Path.dirname(path), '..', 'share',
                          'pocketsphinx', 'model', 'en-us');
         if (!Fs.statSync(path).isDirectory()) {
-          console.error('Pocketsphinx en-us model not found at ' + path);
+          reject(`Pocketsphinx en-us model not found at '${path}'`);
           return;
         }
 
@@ -67,118 +53,139 @@ module.exports = {
           config.setString('-logfn', this.logFile);
         }
 
-        this.listen(words, scoreThreshold, onwake, true);
+        resolve(this.sphinxConfig);
       });
+    });
+  },
 
-      return;
+  listen: function(words, scoreThreshold, onwake) {
+    switch (this.state) {
+      case stateEnum.LOADING:
+        this.pendingState = {
+          state: stateEnum.LISTENING,
+          words: words,
+          scoreThreshold: scoreThreshold,
+          onwake: onwake };
+        return;
+
+      case stateEnum.LISTENING:
+      case stateEnum.PAUSED:
+        this.stop();
+        break;
     }
 
-    var startListening = () => {
-      if (this.pendingState) {
-        var pendingState = this.pendingState;
-        this.pendingState = null;
+    this.state = stateEnum.LOADING;
 
-        switch (pendingState.state) {
-          case stateEnum.LISTENING:
-            this.state = stateEnum.STOPPED;
-            this.listen(pendingState.words, pendingState.scoreThreshold,
-                        pendingState.onwake);
-            return;
+    this.getPsConfig().then(() => {
+      var startListening = () => {
+        if (this.pendingState) {
+          var pendingState = this.pendingState;
+          this.pendingState = null;
 
-          case stateEnum.STOPPED:
-            this.state = stateEnum.STOPPED;
-            return;
+          switch (pendingState.state) {
+            case stateEnum.LISTENING:
+              this.state = stateEnum.STOPPED;
+              this.listen(pendingState.words, pendingState.scoreThreshold,
+                          pendingState.onwake);
+              return;
 
-          default:
-            console.error('Stopping, invalid pending state',
-                          pendingState.state);
-            this.state = stateEnum.STOPPED;
-            return;
+            case stateEnum.STOPPED:
+              this.state = stateEnum.STOPPED;
+              return;
+
+            default:
+              console.error('Stopping, invalid pending state',
+                            pendingState.state);
+              this.state = stateEnum.STOPPED;
+              return;
+          }
         }
-      }
 
-      this.state = stateEnum.LISTENING;
-      this.decoder = new PocketSphinx.Decoder(this.sphinxConfig);
-      this.decoder.setKws('wakeword', this.keywordFile);
-      this.decoder.setSearch('wakeword');
-      this.decoder.startUtt();
+        this.state = stateEnum.LISTENING;
+        if (!this.decoder) {
+          this.decoder = new PocketSphinx.Decoder(this.sphinxConfig);
+        }
+        this.decoder.setKws('wakeword', this.keywordFile);
+        this.decoder.setSearch('wakeword');
+        this.decoder.startUtt();
 
-      if (!this.mic) {
-        this.mic = Mic(
-          { rate: '16000',
-            channels: '1',
-            encoding: 'signed-integer',
-            device: this.deviceName });
-        this.mic.getAudioStream().on('error', e => {
-          console.error('Error streaming from microphone', e);
-        });
-      }
+        if (!this.mic) {
+          this.mic = Mic(
+            { rate: '16000',
+              channels: '1',
+              encoding: 'signed-integer',
+              device: this.deviceName });
+          this.mic.getAudioStream().on('error', e => {
+            console.error('Error streaming from microphone', e);
+          });
+        }
 
-      var decode = data => {
-        if (!this.detected) {
-          this.decoder.processRaw(data, false, false);
+        var decode = data => {
+          if (!this.detected) {
+            this.decoder.processRaw(data, false, false);
+
+            var now = Date.now();
+            var hyp = this.decoder.hyp();
+            if (hyp && hyp.hypstr) {
+              this.decoder.endUtt();
+              if (this._checkScore(scoreThreshold)) {
+                this.detected = hyp.hypstr;
+              } else {
+                this.decoder.startUtt();
+              }
+            }
+            return;
+          }
+
+          onwake(data, this.detected);
+        };
+
+        var buffer = Concat(decode);
+        var speechSampleTime = Date.now();
+
+        var stream = this.mic.getAudioStream();
+        stream.on('data', data => {
+          buffer.write(data);
 
           var now = Date.now();
-          var hyp = this.decoder.hyp();
-          if (hyp && hyp.hypstr) {
-            this.decoder.endUtt();
-            if (this._checkScore(scoreThreshold)) {
-              this.detected = hyp.hypstr;
-            } else {
-              this.decoder.startUtt();
-            }
+          if (now - speechSampleTime > this.sampleTime) {
+            buffer.end();
+            buffer = Concat(decode);
+            speechSampleTime = now;
           }
-          return;
-        }
+        });
 
-        onwake(data, this.detected);
+        this.mic.start();
       };
 
-      var buffer = Concat(decode);
-      var speechSampleTime = Date.now();
-
-      var stream = this.mic.getAudioStream();
-      stream.on('data', data => {
-        buffer.write(data);
-
-        var now = Date.now();
-        if (now - speechSampleTime > this.sampleTime) {
-          buffer.end();
-          buffer = Concat(decode);
-          speechSampleTime = now;
-        }
-      });
-
-      this.mic.start();
-    };
-
-    if (JSON.stringify(this.lastWords) === JSON.stringify(words)) {
-      startListening();
-    } else {
-      // pocketsphinx doesn't allow for multiple keywords or configurable
-      // threshold via any public API except for the keyword file.
-      Fs.open(this.keywordFile, 'w', (e, file) => {
-        if (e) {
-          console.error('Error opening keyword file', e);
-          this.state = stateEnum.STOPPED;
-          return;
-        }
-
-        for (var word of words) {
-          Fs.write(file, `${word}/1e-20/\n`);
-        }
-
-        Fs.close(file, e => {
+      if (JSON.stringify(this.lastWords) === JSON.stringify(words)) {
+        startListening();
+      } else {
+        // pocketsphinx doesn't allow for multiple keywords or configurable
+        // threshold via any public API except for the keyword file.
+        Fs.open(this.keywordFile, 'w', (e, file) => {
           if (e) {
-            console.error('Error closing keyword file', e);
+            console.error('Error opening keyword file', e);
             this.state = stateEnum.STOPPED;
             return;
           }
 
-          startListening();
+          for (var word of words) {
+            Fs.write(file, `${word}/1e-20/\n`);
+          }
+
+          Fs.close(file, e => {
+            if (e) {
+              console.error('Error closing keyword file', e);
+              this.state = stateEnum.STOPPED;
+              return;
+            }
+
+            startListening();
+          });
         });
-      });
-    }
+      }
+    });
   },
 
   _checkScore: function(threshold) {
@@ -236,8 +243,6 @@ module.exports = {
     if (!this.detected) {
       this.decoder.endUtt();
     }
-    this.decoder = null;
-
     this.detected = null;
     this.state = stateEnum.STOPPED;
   }
