@@ -49,6 +49,7 @@ module.exports = {
         var config = this.sphinxConfig = PocketSphinx.Decoder.defaultConfig();
         config.setString("-hmm", Path.join(path, 'en-us'));
         config.setString("-dict", Path.join(path, 'cmudict-en-us.dict'));
+        config.setString("-lm", Path.join(path, 'en-us.lm.bin'));
         if (this.logFile) {
           config.setString('-logfn', this.logFile);
         }
