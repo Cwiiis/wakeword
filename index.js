@@ -9,7 +9,9 @@ const Which = require('which');
 const stateEnum = {
   STOPPED: 'stopped',
   LOADING: 'loading',
+  PRELISTEN: 'pre-listening',
   LISTENING: 'listening',
+  STREAMING: 'streaming',
   PAUSED: 'paused'
 };
 
@@ -47,8 +49,8 @@ module.exports = {
   decoder: null,
 
   /**
-   * The current state. Can be {@code stopped}, {@code loading},
-   * {@code listening} or {@code paused}.
+   * The current state. Can be <code>stopped</code>, <code>loading</code>,
+   * <code>listening</code> or <code>paused</code>.
    * @readonly
    */
   state: stateEnum.STOPPED,
@@ -143,13 +145,13 @@ module.exports = {
    * recognition.
    *
    * @callback onwakeCallback
-   * @param {Object} data Data from the microphone
+   * @param {Object} data Data from the microphone.
    * @param {string} word The word that was recognised.
    */
 
   /**
    * Listens for the specified wake words. Once a word has been recognised,
-   * microphone data will be continuously streamed to the {@code onwake}
+   * microphone data will be continuously streamed to the {@link onwake}
    * callback until it is cancelled.
    *
    * @example
@@ -185,6 +187,7 @@ module.exports = {
           onwake: onwake };
         return;
 
+      case stateEnum.STREAMING:
       case stateEnum.LISTENING:
       case stateEnum.PAUSED:
         this.stop();
@@ -218,13 +221,12 @@ module.exports = {
           }
         }
 
-        this.state = stateEnum.LISTENING;
         this.decoder.setKws('wakeword', this.keywordFile);
         this.decoder.setSearch('wakeword');
         this.decoder.startUtt();
-        this.getMic();
 
-        var decode = data => {
+        this.state = stateEnum.PRELISTEN;
+        this.record(data => {
           if (!this.detected) {
             this.decoder.processRaw(data, false, false);
 
@@ -234,6 +236,7 @@ module.exports = {
               this.decoder.endUtt();
               if (this._checkScore(scoreThreshold)) {
                 this.detected = hyp.hypstr;
+                this.state = stateEnum.STREAMING;
               } else {
                 this.decoder.startUtt();
               }
@@ -242,24 +245,7 @@ module.exports = {
           }
 
           onwake(data, this.detected);
-        };
-
-        var buffer = Concat(decode);
-        var speechSampleTime = Date.now();
-
-        var stream = this.mic.getAudioStream();
-        stream.on('data', data => {
-          buffer.write(data);
-
-          var now = Date.now();
-          if (now - speechSampleTime > this.sampleTime) {
-            buffer.end();
-            buffer = Concat(decode);
-            speechSampleTime = now;
-          }
         });
-
-        this.mic.start();
       };
 
       if (JSON.stringify(this.lastWords) === JSON.stringify(words)) {
@@ -306,6 +292,7 @@ module.exports = {
    */
   pause: function() {
     switch (this.state) {
+      case stateEnum.STREAMING:
       case stateEnum.LISTENING:
         this.mic.pause();
         this.state = stateEnum.PAUSED;
@@ -321,13 +308,16 @@ module.exports = {
 
   /**
    * Resumes microphone recording. If called after recognising a wake word,
-   * this will stop streaming to the {@code onwake} callback and resume
+   * this will stop streaming to the <code>onwake</code> callback and resume
    * listening for the last requested wake words.
    */
   resume: function() {
     switch (this.state) {
       case stateEnum.LISTENING:
-        if (this.detected) {
+        break;
+
+      case stateEnum.STREAMING:
+        if (this.detected && this.detected.length > 0) {
           this.decoder.startUtt();
           this.detected = null;
         }
@@ -335,12 +325,50 @@ module.exports = {
 
       case stateEnum.PAUSED:
         this.mic.resume();
-        this.state = stateEnum.LISTENING;
+        this.state = this.detected ? stateEnum.STREAMING : stateEnum.LISTENING;
         break;
 
       default:
         console.warn('Attempted to resume from invalid state: ', this.state);
     }
+  },
+
+  /**
+   * This callback handles microphone data when recording.
+   *
+   * @callback recordCallback
+   * @param {Object} data Data from the microphone.
+   */
+
+  /**
+   * Streams microphone data to the given {@link callback}.
+   *
+   * @param {recordCallback} callback The callback to handle microphone data
+   */
+  record: function(callback) {
+    if (this.state !== stateEnum.STOPPED &&
+        this.state !== stateEnum.PRELISTEN) {
+      console.warn('Attempted to record from invalid state: ' + this.state);
+      return;
+    }
+
+    var buffer = Concat(callback);
+    var speechSampleTime = Date.now();
+
+    var stream = this.getMic().getAudioStream();
+    stream.on('data', data => {
+      var now = Date.now();
+      buffer.write(data);
+      if (now - speechSampleTime > this.sampleTime) {
+        buffer.end();
+        buffer = Concat(callback);
+        speechSampleTime = now;
+      }
+    });
+
+    this.state = (this.state === stateEnum.STOPPED) ?
+      stateEnum.STREAMING : stateEnum.LISTENING;
+    this.mic.start();
   },
 
   /**
