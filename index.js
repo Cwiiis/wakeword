@@ -61,6 +61,11 @@ module.exports = {
    */
   defaultKwsThreshold: '1e-20',
 
+  /**
+   * Optional cd-metrics object to log information to.
+   */
+  metrics: null,
+
   // Private properties.
   sphinxConfig: null,
   lastWords: [],
@@ -248,11 +253,21 @@ module.exports = {
             var hyp = this.decoder.hyp();
             if (hyp && hyp.hypstr) {
               this.decoder.endUtt();
-              if (this._checkScore(scoreThreshold)) {
+              var score = this._getScore();
+
+              if (score >= scoreThreshold) {
                 this.detected = hyp.hypstr;
                 this.state = stateEnum.STREAMING;
+                if (this.metrics) {
+                  this.metrics.recordFloatingPointEventAsync(
+                    'wakeword', 'spot', 'success', score);
+                }
               } else {
                 this.decoder.startUtt();
+                if (this.metrics) {
+                  this.metrics.recordFloatingPointEventAsync(
+                    'wakeword', 'spot', 'fail', score);
+                }
               }
             }
             return;
@@ -300,13 +315,13 @@ module.exports = {
     });
   },
 
-  _checkScore: function(threshold) {
+  _getScore: function() {
     var seg = this.decoder.seg().iter().next();
     if (!seg) {
-      return false;
+      return 0;
     }
 
-    return this.decoder.getLogmath().exp(seg.prob) >= threshold;
+    return this.decoder.getLogmath().exp(seg.prob);
   },
 
   /**
