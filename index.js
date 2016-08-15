@@ -150,6 +150,12 @@ module.exports = {
    */
 
   /**
+   * This callback is notified when microphone recording has started.
+   *
+   * @callback onreadyCallback
+   */
+
+  /**
    * Listens for the specified wake words. Once a word has been recognised,
    * microphone data will be continuously streamed to the {@link onwake}
    * callback until it is cancelled.
@@ -176,8 +182,10 @@ module.exports = {
    * @param {Array.<string>} words An array of wake words
    * @param {number} scoreThreshold The recognition score threshold (e.g. 0.87)
    * @param {onwakeCallback} onwake The callback to handle microphone data
+   * @param {onreadyCallback} [onready] The callback to be notified when
+   *                                    listening has started
    */
-  listen: function(words, scoreThreshold, onwake) {
+  listen: function(words, scoreThreshold, onwake, onready) {
     switch (this.state) {
       case stateEnum.LOADING:
         this.pendingState = {
@@ -246,6 +254,10 @@ module.exports = {
 
           onwake(data, this.detected);
         });
+
+        if (onready) {
+          onready();
+        }
       };
 
       if (JSON.stringify(this.lastWords) === JSON.stringify(words)) {
