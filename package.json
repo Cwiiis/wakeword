@@ -1,6 +1,6 @@
 {
   "name": "wakeword",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A library to detect wake words and aid in responding to them",
   "license": "GPL-3.0",
   "author": {
@@ -16,7 +16,7 @@
   "dependencies": {
     "concat-stream": "1.5.1",
     "mic": "2.0.1",
-    "pocketsphinx": "5.0.5",
+    "pocketsphinx": "5.0.7",
     "which": "1.2.9"
   }
 }
