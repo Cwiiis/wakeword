@@ -55,6 +55,12 @@ module.exports = {
    */
   state: stateEnum.STOPPED,
 
+  /**
+   * The default keyword search threshold to specify to Pocketsphinx when
+   * none is specified with the keyword.
+   */
+  defaultKwsThreshold: '1e-20',
+
   // Private properties.
   sphinxConfig: null,
   lastWords: [],
@@ -273,7 +279,11 @@ module.exports = {
           }
 
           for (var word of words) {
-            Fs.write(file, `${word}/1e-20/\n`);
+            if (word.match(/[^\/]*\/[^\/]*\/$/)) {
+              Fs.write(file, `${word}\n`);
+            } else {
+              Fs.write(file, `${word}/${this.defaultKwsThreshold}/\n`);
+            }
           }
 
           Fs.close(file, e => {
