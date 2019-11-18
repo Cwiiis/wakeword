@@ -14,7 +14,7 @@
   },
   "main": "index.js",
   "dependencies": {
-    "concat-stream": "1.5.1",
+    "concat-stream": "2.0.0",
     "mic": "2.0.1",
     "pocketsphinx": "5.0.7",
     "which": "1.2.9"
